@@ -1,0 +1,46 @@
+'use strict';
+const KEY='blackjack-casino-v2',ranks=['A','2','3','4','5','6','7','8','9','10','J','Q','K'],suits=['♠','♥','♦','♣'];
+const $=id=>document.getElementById(id),money=n=>'$'+Number(n).toLocaleString('en-CA');let g,chip=500;
+function makeShoe(){let a=[];for(let d=0;d<6;d++)for(let s of suits)for(let r of ranks)a.push([r,s]);for(let i=a.length-1;i>0;i--){let j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
+function fresh(){return {version:2,bankroll:10000,start:10000,rounds:0,shoeNo:1,deck:makeShoe(),phase:'betting',spotCount:1,bets:[500],hands:[],dealer:[],active:0,insurance:0,history:[],message:'Choose your bets and deal.'};}
+function draw(){if(!g.deck.length)throw Error('Shoe unexpectedly empty');return g.deck.pop();}
+function value(c){return c[0]==='A'?1:['10','J','Q','K'].includes(c[0])?10:Number(c[0]);}
+function score(cards){let n=cards.reduce((s,c)=>s+value(c),0),soft=cards.some(c=>c[0]==='A')&&n+10<=21;return {n:n+(soft?10:0),soft};}
+function natural(h){return !h.split&&h.cards.length===2&&score(h.cards).n===21;}
+function card(c){if(c==='hidden')return '<div class="card back"></div>';return '<div class="card '+('♥♦'.includes(c[1])?'red':'')+'">'+c[0]+c[1]+'</div>';}
+function save(){localStorage.setItem(KEY,JSON.stringify(g));}
+function load(){try{let x=JSON.parse(localStorage.getItem(KEY));if(x&&x.version===2&&Array.isArray(x.deck)&&Array.isArray(x.hands)&&Array.isArray(x.bets))return x;}catch(e){}return fresh();}
+function resetGame(){if(!confirm('Start a new $10,000 session? This clears the current game.'))return;g=fresh();save();render();}
+function configureSpots(){if(g.phase!=='betting'&&g.phase!=='settled')return;let n=Number($('spotCount').value);g.spotCount=n;while(g.bets.length<n)g.bets.push(500);g.bets.length=n;save();render();}
+function setBet(i){if(g.phase!=='betting'&&g.phase!=='settled')return;g.bets[i]=chip;save();render();}
+function deal(){if(g.phase!=='betting'&&g.phase!=='settled')return;let total=g.bets.reduce((a,b)=>a+b,0);if(total>g.bankroll){g.message='Insufficient bankroll for those wagers.';render();return;}if(g.deck.length<=78){g.deck=makeShoe();g.shoeNo++;}
+g.bankroll-=total;g.rounds++;g.hands=g.bets.map((bet,i)=>({spot:i+1,bet,cards:[],split:false,splitAces:false,done:false,actions:[]}));g.dealer=[];g.insurance=0;g.active=0;
+for(let h of g.hands)h.cards.push(draw());g.dealer.push(draw());for(let h of g.hands)h.cards.push(draw());g.dealer.push(draw());
+g.phase='playing';g.message='Round '+g.rounds+' dealt.';
+if(g.dealer[0][0]==='A'){g.phase='insurance';g.message='Dealer shows an Ace. Insurance available (not recommended).';}
+else if(value(g.dealer[0])===10&&score(g.dealer).n===21){settle(true);}else advance();save();render();}
+function insurance(yes){if(g.phase!=='insurance')return;let stake=g.hands.reduce((a,h)=>a+h.bet/2,0);if(yes&&stake>g.bankroll){g.message='Not enough funds for insurance.';render();return;}g.insurance=yes?stake:0;g.bankroll-=g.insurance;if(score(g.dealer).n===21){settle(true);}else{g.phase='playing';advance();}save();render();}
+function advance(){while(g.active<g.hands.length){let h=g.hands[g.active];if(!h.done){if(natural(h)){h.done=true;g.active++;continue;}return;}g.active++;}settle(false);}
+function settle(dealerBJ){g.phase='settled';let playable=g.hands.some(h=>score(h.cards).n<=21&&!natural(h));if(!dealerBJ&&playable){while(score(g.dealer).n<17)g.dealer.push(draw());}
+let dn=score(g.dealer).n,profit=0,results=[];for(let h of g.hands){let n=score(h.cards).n,p=dealerBJ?(natural(h)?0:-h.bet):n>21?-h.bet:natural(h)?h.bet*1.5:dn>21||n>dn?h.bet:n===dn?0:-h.bet;g.bankroll+=h.bet+p;profit+=p;results.push({spot:h.spot,profit:p,total:n,bet:h.bet});}
+let insuranceProfit=g.insurance?(dealerBJ?2*g.insurance:-g.insurance):0;if(dealerBJ)g.bankroll+=3*g.insurance;profit+=insuranceProfit;
+g.history.push({round:g.rounds,profit,bankroll:g.bankroll,results,dealer:g.dealer.map(c=>c.slice())});g.message='Round '+g.rounds+' complete: '+(profit>=0?'+':'')+money(profit)+'. Dealer '+dn+'.';save();}
+function act(action){if(g.phase!=='playing')return;let h=g.hands[g.active];if(action==='hit'){h.cards.push(draw());h.actions.push('hit');if(score(h.cards).n>=21){h.done=true;g.active++;advance();}}
+if(action==='stand'){h.done=true;h.actions.push('stand');g.active++;advance();}
+if(action==='double'){if(h.cards.length!==2||h.bet>g.bankroll||h.splitAces)return;g.bankroll-=h.bet;h.bet*=2;h.cards.push(draw());h.actions.push('double');h.done=true;g.active++;advance();}
+if(action==='split'){if(h.cards.length!==2||value(h.cards[0])!==value(h.cards[1])||h.bet>g.bankroll||g.hands.filter(x=>x.spot===h.spot).length>=4||h.splitAces)return;g.bankroll-=h.bet;let first=h.cards[0],second=h.cards[1],aces=first[0]==='A';h.cards=[first,draw()];h.split=true;h.splitAces=aces;h.actions.push('split');let other={spot:h.spot,bet:h.bet,cards:[second,draw()],split:true,splitAces:aces,done:aces,actions:[]};g.hands.splice(g.active+1,0,other);if(aces||score(h.cards).n>=21){h.done=true;g.active++;advance();}}
+save();render();}
+function strategy(h,up){let t=score(h.cards),u=value(up),pair=h.cards.length===2&&value(h.cards[0])===value(h.cards[1]);if(h.splitAces)return 'STAND';
+if(pair){let r=value(h.cards[0]);if(r===1||r===8)return 'SPLIT';if(r===10)return 'STAND';if(r===9)return [2,3,4,5,6,8,9].includes(u)?'SPLIT':'STAND';if(r===7)return u<=7?'SPLIT':'HIT';if(r===6)return u>=2&&u<=6?'SPLIT':'HIT';if(r===5){}else if(r===4)return [5,6].includes(u)?'SPLIT':'HIT';else if(r===2||r===3)return u>=2&&u<=7?'SPLIT':'HIT';}
+if(t.soft){if(t.n>=19)return 'STAND';if(t.n===18)return u>=3&&u<=6?'DOUBLE':u===2||u===7||u===8?'STAND':'HIT';if(t.n===17)return u>=3&&u<=6?'DOUBLE':'HIT';if(t.n===16||t.n===15)return u>=4&&u<=6?'DOUBLE':'HIT';return u===5||u===6?'DOUBLE':'HIT';}
+if(t.n>=17)return 'STAND';if(t.n>=13)return u>=2&&u<=6?'STAND':'HIT';if(t.n===12)return u>=4&&u<=6?'STAND':'HIT';if(t.n===11)return 'DOUBLE';if(t.n===10)return u>=2&&u<=9?'DOUBLE':'HIT';if(t.n===9)return u>=3&&u<=6?'DOUBLE':'HIT';return 'HIT';}
+function render(){let betting=g.phase==='betting'||g.phase==='settled';$('bankroll').textContent=money(g.bankroll);$('round').textContent=g.rounds;$('shoe').textContent=g.shoeNo+' · '+g.deck.length;
+let hide=g.phase==='playing'||g.phase==='insurance';$('dealerCards').innerHTML=g.dealer.length?g.dealer.map((c,i)=>i===1&&hide?card('hidden'):card(c)).join(''):'<span class="muted">Waiting for deal</span>';$('dealerTotal').textContent=g.dealer.length?(hide?'Showing '+g.dealer[0][0]+g.dealer[0][1]:'Total '+score(g.dealer).n):'';
+$('tableMessage').textContent=g.phase==='playing'?'Spot '+g.hands[g.active].spot+' · Your turn':g.phase==='insurance'?'Insurance offered':g.phase==='settled'?'Round settled':'Place your bets';
+let visibleHands=betting?g.bets.map((bet,i)=>({spot:i+1,bet,cards:[],done:false})):g.hands;
+$('spots').innerHTML=visibleHands.map((h,i)=>'<div class="spot '+(g.phase==='playing'&&i===g.active?'active':'')+'" '+(betting?'onclick="setBet('+i+')"':'')+'><b>SPOT '+h.spot+'</b><div class="cards">'+(h.cards.length?h.cards.map(card).join(''):'<span class="muted">Tap to wager</span>')+'</div><div>'+(h.cards.length?'Total '+score(h.cards).n:'')+'</div><b>'+money(h.bet)+'</b>'+(h.done?' <small>Done</small>':'')+'</div>').join('');
+$('message').textContent=g.message;$('betting').style.display=betting?'block':'none';$('actions').style.display=g.phase==='playing'?'grid':'none';$('insurance').style.display=g.phase==='insurance'?'grid':'none';
+$('spotCount').innerHTML=Array.from({length:7},(_,i)=>'<option value="'+(i+1)+'" '+(g.spotCount===i+1?'selected':'')+'>'+(i+1)+'</option>').join('');$('chips').innerHTML=[100,500,1000,5000].map(v=>'<button class="chip '+(chip===v?'selected':'')+'" onclick="chip='+v+';render()">'+money(v)+'</button>').join('');let betSum=g.bets.reduce((a,b)=>a+b,0);$('betTotal').textContent='Total bet: '+money(betSum)+(betSum>g.bankroll?' · Insufficient funds':'');
+if(g.phase==='playing'){let h=g.hands[g.active],pair=h.cards.length===2&&value(h.cards[0])===value(h.cards[1]);$('double').disabled=h.cards.length!==2||h.bet>g.bankroll||h.splitAces;$('split').disabled=!pair||h.bet>g.bankroll||g.hands.filter(x=>x.spot===h.spot).length>=4||h.splitAces;let rec=strategy(h,g.dealer[0]);if(rec==='DOUBLE'&&$('double').disabled)rec='HIT';if(rec==='SPLIT'&&$('split').disabled)rec=score(h.cards).n>=17?'STAND':'HIT';$('strategy').textContent=rec+' · '+score(h.cards).n+(score(h.cards).soft?' soft':' hard')+' vs '+g.dealer[0][0];}else $('strategy').textContent=g.phase==='insurance'?'DECLINE INSURANCE':g.phase==='settled'?'Round complete':'Awaiting deal';
+$('summary').textContent='Completed: '+g.history.length+' · Session P/L: '+(g.bankroll-g.start>=0?'+':'')+money(g.bankroll-g.start)+' · '+g.deck.length+' cards remain. All actions saved automatically.';}
+g=load();render();
